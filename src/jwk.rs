@@ -462,7 +462,7 @@ impl Jwk {
                     })
                 }
                 crate::algorithms::AlgorithmFamily::Rsa => {
-                    let (n, e) = (CryptoProvider::get_default_or_install_from_crate_features()
+                    let (n, e) = (CryptoProvider::get_default()
                         .jwk_utils
                         .extract_rsa_public_key_components)(
                         key.inner()
@@ -474,12 +474,11 @@ impl Jwk {
                     })
                 }
                 crate::algorithms::AlgorithmFamily::Ec => {
-                    let (curve, x, y) =
-                        (CryptoProvider::get_default_or_install_from_crate_features()
-                            .jwk_utils
-                            .extract_ec_public_key_coordinates)(
-                            key.inner(), alg
-                        )?;
+                    let (curve, x, y) = (CryptoProvider::get_default()
+                        .jwk_utils
+                        .extract_ec_public_key_coordinates)(
+                        key.inner(), alg
+                    )?;
                     AlgorithmParameters::EllipticCurve(EllipticCurveKeyParameters {
                         key_type: EllipticCurveKeyType::EC,
                         curve,
@@ -541,9 +540,10 @@ impl Jwk {
             },
         };
 
-        b64_encode((CryptoProvider::get_default_or_install_from_crate_features()
-            .jwk_utils
-            .compute_digest)(pre.as_bytes(), hash_function))
+        b64_encode((CryptoProvider::get_default().jwk_utils.compute_digest)(
+            pre.as_bytes(),
+            hash_function,
+        ))
     }
 }
 

@@ -99,7 +99,7 @@ fn new_verifier(
 }
 
 /// The default [`CryptoProvider`] backed by [`aws_lc_rs`].
-pub const DEFAULT_PROVIDER: CryptoProvider = CryptoProvider {
+pub static DEFAULT_PROVIDER: CryptoProvider = CryptoProvider {
     signer_factory: new_signer,
     verifier_factory: new_verifier,
     jwk_utils: JwkUtils {

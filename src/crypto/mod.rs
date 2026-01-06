@@ -9,12 +9,16 @@
 //! [`Verifier`]: signature::Verifier
 //! [`CryptoProvider`]: crate::crypto::CryptoProvider
 
-use std::sync::Arc;
-
 use crate::algorithms::Algorithm;
 use crate::errors::Result;
 use crate::jwk::{EllipticCurve, ThumbprintHash};
 use crate::{DecodingKey, EncodingKey};
+
+const NOT_INSTALLED_ERROR: &str = r###"
+Could not automatically determine the process-level CryptoProvider from jsonwebtoken crate features.
+Call CryptoProvider::install_default() before this point to select a provider manually, or make sure exactly one of the 'rust_crypto' and 'aws_lc_rs' features is enabled.
+See the documentation of the CryptoProvider type for more information.
+"###;
 
 /// `aws_lc_rs` based CryptoProvider.
 #[cfg(feature = "aws_lc_rs")]
@@ -48,9 +52,7 @@ pub trait JwtVerifier: Verifier<Vec<u8>> {
 ///
 /// If you just want to encode a JWT, use `encode` instead.
 pub fn sign(message: &[u8], key: &EncodingKey, algorithm: Algorithm) -> Result<String> {
-    let provider = (CryptoProvider::get_default_or_install_from_crate_features().signer_factory)(
-        &algorithm, key,
-    )?;
+    let provider = (CryptoProvider::get_default().signer_factory)(&algorithm, key)?;
     Ok(b64_encode(provider.sign(message)))
 }
 
@@ -68,9 +70,7 @@ pub fn verify(
     key: &DecodingKey,
     algorithm: Algorithm,
 ) -> Result<bool> {
-    let provider = (CryptoProvider::get_default_or_install_from_crate_features().verifier_factory)(
-        &algorithm, key,
-    )?;
+    let provider = (CryptoProvider::get_default().verifier_factory)(&algorithm, key)?;
     Ok(provider.verify(message, &b64_decode(signature)?).is_ok())
 }
 
@@ -96,50 +96,56 @@ pub struct CryptoProvider {
 }
 
 impl CryptoProvider {
+    /// Retrieve automatically selected instance
+    ///
+    /// If `rust_crypto` or `aws_lc_rs` are enabled then it returns selected provider
+    ///
+    /// Otherwise returns default unimplemented instance
+    pub const fn new_from_features() -> &'static Self {
+        #[cfg(all(feature = "rust_crypto", not(feature = "aws_lc_rs")))]
+        {
+            return &rust_crypto::DEFAULT_PROVIDER;
+        }
+
+        #[cfg(all(feature = "aws_lc_rs", not(feature = "rust_crypto")))]
+        {
+            return &aws_lc::DEFAULT_PROVIDER;
+        }
+
+        #[allow(unused)]
+        Self::new_unimplemented()
+    }
+
+    /// Returns unimplemented instance
+    pub const fn new_unimplemented() -> &'static Self {
+        fn signer_factory(_: &Algorithm, _: &EncodingKey) -> Result<Box<dyn JwtSigner>> {
+            panic!("{}", NOT_INSTALLED_ERROR);
+        }
+        fn verifier_factory(_: &Algorithm, _: &DecodingKey) -> Result<Box<dyn JwtVerifier>> {
+            panic!("{}", NOT_INSTALLED_ERROR);
+        }
+
+        static INSTANCE: CryptoProvider = CryptoProvider {
+            signer_factory,
+            verifier_factory,
+            jwk_utils: JwkUtils::new_unimplemented(),
+        };
+
+        &INSTANCE
+    }
+
     /// Set this `CryptoProvider` as the default for this process.
     ///
     /// This can be called successfully at most once in any process execution.
-    pub fn install_default(self) -> std::result::Result<(), Arc<Self>> {
+    pub fn install_default(&'static self) -> std::result::Result<(), &'static Self> {
         static_default::install_default(self)
     }
 
     /// Get the default `CryptoProvider` for this process.
     ///
     /// This will be `None` if no default has been set yet.
-    pub fn get_default() -> Option<&'static Arc<Self>> {
+    pub fn get_default() -> &'static Self {
         static_default::get_default()
-    }
-
-    /// Get the default if it has been set yet, or determine one from the crate features if possible.
-    pub(crate) fn get_default_or_install_from_crate_features() -> &'static Arc<Self> {
-        if let Some(provider) = Self::get_default() {
-            return provider;
-        }
-
-        let provider = Self::from_crate_features()
-            .expect(r###"
-Could not automatically determine the process-level CryptoProvider from jsonwebtoken crate features.
-Call CryptoProvider::install_default() before this point to select a provider manually, or make sure exactly one of the 'rust_crypto' and 'aws_lc_rs' features is enabled.
-See the documentation of the CryptoProvider type for more information.
-            "###);
-        let _ = provider.install_default();
-        Self::get_default().unwrap()
-    }
-
-    /// Determine a `CryptoProvider` based on crate features.
-    pub fn from_crate_features() -> Option<Self> {
-        #[cfg(all(feature = "rust_crypto", not(feature = "aws_lc_rs")))]
-        {
-            return Some(rust_crypto::DEFAULT_PROVIDER);
-        }
-
-        #[cfg(all(feature = "aws_lc_rs", not(feature = "rust_crypto")))]
-        {
-            return Some(aws_lc::DEFAULT_PROVIDER);
-        }
-
-        #[allow(unreachable_code)]
-        None
     }
 }
 
@@ -159,30 +165,52 @@ pub struct JwkUtils {
     pub compute_digest: fn(&[u8], ThumbprintHash) -> Vec<u8>,
 }
 
-impl Default for JwkUtils {
-    fn default() -> Self {
+impl JwkUtils {
+    ///Creates unimplemented instance
+    pub const fn new_unimplemented() -> Self {
+        fn extract_rsa_public_key_components(_: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+            panic!("{}", NOT_INSTALLED_ERROR);
+        }
+
+        fn extract_ec_public_key_coordinates(
+            _: &[u8],
+            _: Algorithm,
+        ) -> Result<(EllipticCurve, Vec<u8>, Vec<u8>)> {
+            panic!("{}", NOT_INSTALLED_ERROR);
+        }
+
+        fn compute_digest(_: &[u8], _: ThumbprintHash) -> Vec<u8> {
+            panic!("{}", NOT_INSTALLED_ERROR);
+        }
+
         Self {
-            extract_rsa_public_key_components: |_| unimplemented!(),
-            extract_ec_public_key_coordinates: |_, _| unimplemented!(),
-            compute_digest: |_, _| unimplemented!(),
+            extract_rsa_public_key_components,
+            extract_ec_public_key_coordinates,
+            compute_digest,
         }
     }
 }
 
+impl Default for JwkUtils {
+    fn default() -> Self {
+        Self::new_unimplemented()
+    }
+}
+
 mod static_default {
-    use std::sync::{Arc, OnceLock};
+    use std::sync::OnceLock;
 
     use super::CryptoProvider;
 
-    static PROCESS_DEFAULT_PROVIDER: OnceLock<Arc<CryptoProvider>> = OnceLock::new();
+    static PROCESS_DEFAULT_PROVIDER: OnceLock<&'static CryptoProvider> = OnceLock::new();
 
     pub(crate) fn install_default(
-        default_provider: CryptoProvider,
-    ) -> Result<(), Arc<CryptoProvider>> {
-        PROCESS_DEFAULT_PROVIDER.set(Arc::new(default_provider))
+        default_provider: &'static CryptoProvider,
+    ) -> Result<(), &'static CryptoProvider> {
+        PROCESS_DEFAULT_PROVIDER.set(default_provider)
     }
 
-    pub(crate) fn get_default() -> Option<&'static Arc<CryptoProvider>> {
-        PROCESS_DEFAULT_PROVIDER.get()
+    pub(crate) fn get_default() -> &'static CryptoProvider {
+        PROCESS_DEFAULT_PROVIDER.get_or_init(CryptoProvider::new_from_features)
     }
 }
